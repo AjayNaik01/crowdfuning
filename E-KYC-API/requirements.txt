@@ -1,0 +1,6 @@
+Flask
+Pillow
+pytesseract
+fuzzywuzzy
+python-Levenshtein
+face_recognition
