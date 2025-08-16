@@ -67,8 +67,63 @@ const isValidEmail = (email) => {
     return emailRegex.test(email);
 };
 
+// Send donor notification email with exact notification content
+const sendDonorNotificationEmail = async (email, name, notification) => {
+    try {
+        const transporter = createTransporter();
+        const mailOptions = {
+            from: process.env.EMAIL_FROM,
+            to: email,
+            subject: `Notification: ${notification.type ? notification.type.toUpperCase() : 'Notification'} - ${notification.campaignTitle}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #f9fafb; padding: 24px; border-radius: 8px; border: 1px solid #e5e7eb;">
+                  <div style="margin-bottom: 16px;">
+                    <span style="display: inline-block; background: #fef3c7; color: #b45309; padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: bold;">${notification.type ? notification.type.toUpperCase() : ''}</span>
+                  </div>
+                  <div style="margin-bottom: 8px;">
+                    <span style="color: #6366f1; font-weight: bold;">Campaign:</span> <span style="color: #3730a3; font-weight: bold; text-decoration: underline;">${notification.campaignTitle}</span>
+                  </div>
+                  <div style="margin-bottom: 8px;">
+                    <span style="color: #374151;">Document:</span> <a href="${notification.documentUrl}" target="_blank" style="color: #2563eb; text-decoration: underline;">${notification.documentTitle}</a>
+                  </div>
+                  <div style="margin-bottom: 16px; color: #111827; font-weight: 500;">${notification.message}</div>
+                  <div style="color: #6b7280; font-size: 13px;">${notification.date}</div>
+                  ${notification.voteUrl ? `<div style="margin-top: 20px;"><a href="${notification.voteUrl}" style="background: #6366f1; color: #fff; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold;">Review & Vote</a></div>` : ''}
+                </div>
+            `
+        };
+        const info = await transporter.sendMail(mailOptions);
+        console.log('Donor notification email sent:', info.messageId);
+        return { success: true, messageId: info.messageId };
+    } catch (error) {
+        console.error('Donor notification email failed:', error);
+        throw new Error('Failed to send donor notification email.');
+    }
+};
+
+// Generic email sending function
+const sendEmail = async (email, subject, htmlContent) => {
+    try {
+        const transporter = createTransporter();
+        const mailOptions = {
+            from: process.env.EMAIL_FROM,
+            to: email,
+            subject: subject,
+            html: htmlContent
+        };
+        const info = await transporter.sendMail(mailOptions);
+        console.log('Email sent successfully:', info.messageId);
+        return { success: true, messageId: info.messageId };
+    } catch (error) {
+        console.error('Email sending failed:', error);
+        throw new Error('Failed to send email.');
+    }
+};
+
 module.exports = {
     sendOTPEmail,
     generateOTP,
-    isValidEmail
+    isValidEmail,
+    sendDonorNotificationEmail,
+    sendEmail
 }; 

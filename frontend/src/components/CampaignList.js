@@ -12,6 +12,14 @@ const CampaignList = () => {
     const [totalPages, setTotalPages] = useState(1);
     const [showProfile, setShowProfile] = useState(false);
     const navigate = useNavigate();
+    const [showDonationModal, setShowDonationModal] = useState(false);
+    const [selectedCampaign, setSelectedCampaign] = useState(null);
+    const [donationAmount, setDonationAmount] = useState('');
+    const [donorName, setDonorName] = useState('');
+    const [donorMessage, setDonorMessage] = useState('');
+    const [isAnonymous, setIsAnonymous] = useState(false);
+    const [isDonating, setIsDonating] = useState(false);
+    const [showPublicReviewModal, setShowPublicReviewModal] = useState(false);
 
     const categories = [
         { value: 'disaster_recovery', label: 'Disaster Recovery' },
@@ -33,7 +41,15 @@ const CampaignList = () => {
         }
         fetchCampaigns();
         fetchUserCampaigns();
+        loadRazorpayScript();
     }, [currentPage, searchQuery, selectedCategory]);
+
+    useEffect(() => {
+        if (localStorage.getItem('showPublicReviewModal') === 'true') {
+            setShowPublicReviewModal(true);
+            localStorage.removeItem('showPublicReviewModal');
+        }
+    }, []);
 
     const fetchCampaigns = async () => {
         setLoading(true);
@@ -138,6 +154,146 @@ const CampaignList = () => {
         if (imagePath.startsWith('http')) return imagePath;
         // Otherwise, construct the full URL
         return `http://localhost:5001${imagePath}`;
+    };
+
+    // Donation modal functions
+    const openDonationModal = (campaign) => {
+        setSelectedCampaign(campaign);
+        setDonationAmount('');
+        setDonorName('');
+        setDonorMessage('');
+        setIsAnonymous(false);
+        setShowDonationModal(true);
+    };
+
+    const closeDonationModal = () => {
+        setShowDonationModal(false);
+        setSelectedCampaign(null);
+        setDonationAmount('');
+        setDonorName('');
+        setDonorMessage('');
+        setIsAnonymous(false);
+    };
+
+    const handleDonate = async (e) => {
+        e.preventDefault();
+        if (!donationAmount || !donorName) {
+            alert('Please fill in all required fields');
+            return;
+        }
+
+        setIsDonating(true);
+        try {
+            const token = localStorage.getItem('token');
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
+            // Step 1: Create Razorpay order
+            const orderResponse = await fetch('http://localhost:5001/api/donations/create-order', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    amount: parseFloat(donationAmount),
+                    campaignId: selectedCampaign._id
+                })
+            });
+
+            const orderData = await orderResponse.json();
+            if (!orderData.success) {
+                throw new Error(orderData.message || 'Failed to create payment order');
+            }
+
+            // Step 2: Initialize Razorpay payment
+            const options = {
+                key: orderData.data.key,
+                amount: orderData.data.amount,
+                currency: orderData.data.currency,
+                name: 'CrowdFund',
+                description: `Donation for ${selectedCampaign.title}`,
+                order_id: orderData.data.orderId,
+                handler: async function (response) {
+                    try {
+                        // Step 3: Verify payment on backend
+                        const verifyResponse = await fetch('http://localhost:5001/api/donations/verify-payment', {
+                            method: 'POST',
+                            headers,
+                            body: JSON.stringify({
+                                orderId: response.razorpay_order_id,
+                                paymentId: response.razorpay_payment_id,
+                                signature: response.razorpay_signature,
+                                campaignId: selectedCampaign._id,
+                                donorName: donorName,
+                                message: donorMessage,
+                                isAnonymous: isAnonymous
+                            })
+                        });
+
+                        const verifyData = await verifyResponse.json();
+                        if (verifyData.success) {
+                            closeDonationModal();
+                            // Refresh the page to update campaign amounts
+                            await fetchCampaigns();
+                            const latestCampaign = campaigns.find(c => c._id === selectedCampaign._id) || selectedCampaign;
+                            console.log('Checking modal condition:', {
+                                votingEnabled: latestCampaign?.votingEnabled,
+                                voting: latestCampaign?.voting,
+                                proofDocument: latestCampaign?.proofDocument,
+                                latestCampaign
+                            });
+                            if (
+                                (latestCampaign?.votingEnabled || latestCampaign?.voting === true) &&
+                                (!latestCampaign?.proofDocument || (Array.isArray(latestCampaign.proofDocument) && latestCampaign.proofDocument.length === 0))
+                            ) {
+                                localStorage.setItem('showPublicReviewModal', 'true');
+                                setShowPublicReviewModal(true);
+                            }
+                        } else {
+                            throw new Error(verifyData.message || 'Payment verification failed');
+                        }
+                    } catch (error) {
+                        console.error('Payment verification error:', error);
+                        alert('Payment verification failed. Please contact support if amount was deducted.');
+                    }
+                },
+                prefill: {
+                    name: donorName,
+                    email: user?.email || '',
+                    contact: user?.phone || ''
+                },
+                theme: {
+                    color: '#4F46E5'
+                },
+                modal: {
+                    ondismiss: function () {
+                        setIsDonating(false);
+                    }
+                }
+            };
+
+            const rzp = new window.Razorpay(options);
+            rzp.open();
+
+        } catch (error) {
+            console.error('Error making donation:', error);
+            alert(error.message || 'Failed to process donation. Please try again.');
+        } finally {
+            setIsDonating(false);
+        }
+    };
+
+    // Load Razorpay script
+    const loadRazorpayScript = () => {
+        if (window.Razorpay) return; // Already loaded
+
+        const script = document.createElement('script');
+        script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+        script.async = true;
+        document.body.appendChild(script);
     };
 
     if (loading) {
@@ -250,7 +406,7 @@ const CampaignList = () => {
                                                         <div className="bg-gray-50 rounded-lg p-3">
                                                             <p className="text-xs text-gray-600">KYC Status</p>
                                                             <p className="text-sm font-medium text-gray-900 capitalize">
-                                                                {user.kycStatus?.replace('_', ' ') || 'Not Submitted'}
+                                                                {user.kycStatus === 'PENDING' ? 'Under Review' : (user.kycStatus?.replace('_', ' ') || 'Not Submitted')}
                                                             </p>
                                                         </div>
                                                     </div>
@@ -270,7 +426,7 @@ const CampaignList = () => {
                                                             Notifications
                                                         </Link>
                                                         <Link
-                                                            to="/donations"
+                                                            to="/donations-history"
                                                             className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md"
                                                         >
                                                             Donation History
@@ -343,84 +499,102 @@ const CampaignList = () => {
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                         {campaigns.map(campaign => (
-                            <div key={campaign._id} className="bg-white rounded-lg shadow-sm overflow-hidden hover:shadow-md transition-shadow">
+                            <div
+                                key={campaign._id}
+                                className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow border border-gray-100 flex flex-col cursor-pointer group"
+                                onClick={() => navigate(`/campaign/${campaign._id}`)}
+                                tabIndex={0}
+                                role="button"
+                                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigate(`/campaign/${campaign._id}`); }}
+                                style={{ outline: 'none' }}
+                            >
                                 {/* Campaign Image */}
-                                <div className="h-48 bg-gradient-to-br from-indigo-400 to-purple-500 relative">
-                                    {campaign.images && campaign.images.length > 0 && (
+                                <div className="relative h-48 w-full overflow-hidden">
+                                    {campaign.images && campaign.images.length > 0 ? (
                                         <img
                                             src={getImageUrl(campaign.images[0])}
                                             alt={campaign.title}
-                                            className="w-full h-full object-cover"
-                                            onError={(e) => {
-                                                e.target.style.display = 'none';
-                                                e.target.nextSibling.style.display = 'flex';
-                                            }}
+                                            className="w-full h-full object-cover rounded-t-2xl group-hover:scale-105 transition-transform duration-200"
                                         />
+                                    ) : (
+                                        <div className="w-full h-full flex items-center justify-center bg-gray-100 text-gray-400 text-lg">No Image</div>
                                     )}
-                                    <div
-                                        className="w-full h-full flex items-center justify-center text-white text-lg font-medium absolute inset-0"
-                                        style={{
-                                            display: campaign.images && campaign.images.length > 0 ? 'none' : 'flex',
-                                            zIndex: 1
-                                        }}
-                                    >
-                                        {campaign.title}
+                                    {/* Category Tags */}
+                                    <div className="absolute top-3 left-3 flex flex-wrap gap-2 z-10">
+                                        <span className={`px-2 py-1 text-xs font-semibold rounded bg-orange-50 text-orange-600 border border-orange-200`}>{categories.find(c => c.value === campaign.category)?.label || 'Other'}</span>
+                                        {campaign.isOrganization && <span className="px-2 py-1 text-xs font-semibold rounded bg-pink-50 text-pink-600 border border-pink-200">Foundation</span>}
                                     </div>
-                                    <div className="absolute top-3 left-3 z-10">
-                                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${getCategoryColor(campaign.category)}`}>
-                                            {categories.find(c => c.value === campaign.category)?.label}
+                                </div>
+                                {/* Card Content */}
+                                <div className="p-5 flex flex-col flex-1">
+                                    <h3 className="text-lg font-bold text-blue-900 mb-1 line-clamp-2">{campaign.title}</h3>
+                                    <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+                                        <span className="flex items-center gap-1">
+                                            <span className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs">
+                                                {campaign.creator?.name ? campaign.creator.name.charAt(0).toUpperCase() : 'U'}
+                                            </span>
+                                            {campaign.isOrganization && campaign.organizationName ? campaign.organizationName : (campaign.creator?.name || 'Unknown')}
+                                        </span>
+                                        <span className="mx-2">•</span>
+                                        <span className="flex items-center gap-1">
+                                            <svg className="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3" /></svg>
+                                            {getDaysLeft(campaign.endDate)} Days left
                                         </span>
                                     </div>
-                                </div>
-
-                                {/* Campaign Content */}
-                                <div className="p-6">
-                                    <h3 className="text-xl font-semibold text-gray-900 mb-2 line-clamp-2">
-                                        {campaign.title}
-                                    </h3>
-                                    <p className="text-gray-600 mb-4 line-clamp-3">
-                                        {campaign.description}
-                                    </p>
-
-                                    {/* Progress Bar */}
-                                    <div className="mb-4">
-                                        <div className="flex justify-between text-sm text-gray-600 mb-1">
-                                            <span>Raised: {formatCurrency(campaign.currentAmount)}</span>
-                                            <span>{Math.round(calculateProgress(campaign.currentAmount, campaign.targetAmount))}%</span>
-                                        </div>
-                                        <div className="w-full bg-gray-200 rounded-full h-2">
-                                            <div
-                                                className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
-                                                style={{ width: `${calculateProgress(campaign.currentAmount, campaign.targetAmount)}%` }}
-                                            ></div>
-                                        </div>
-                                        <div className="text-sm text-gray-500 mt-1">
-                                            Goal: {formatCurrency(campaign.targetAmount)}
+                                    <p className="text-gray-600 text-sm mb-3 line-clamp-2">{campaign.description}</p>
+                                    <div className="mb-3">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <div className="w-12 bg-yellow-100 text-yellow-700 text-xs font-bold rounded px-2 py-0.5 text-center">
+                                                {Math.round(calculateProgress(campaign.currentAmount, campaign.targetAmount))}%
+                                            </div>
+                                            <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                                <div
+                                                    className="h-2 bg-yellow-400 rounded-full transition-all duration-300"
+                                                    style={{ width: `${calculateProgress(campaign.currentAmount, campaign.targetAmount)}%` }}
+                                                ></div>
+                                            </div>
                                         </div>
                                     </div>
-
-                                    {/* Campaign Info */}
-                                    <div className="flex justify-between items-center text-sm text-gray-500 mb-4">
-                                        <span>By {campaign.isOrganization && campaign.organizationName ? campaign.organizationName : (campaign.creator?.name || 'Anonymous')}</span>
-                                        <span>{getDaysLeft(campaign.endDate)} days left</span>
+                                    <div className="flex justify-between items-center text-xs font-semibold mt-auto pt-2 border-t border-gray-100">
+                                        <span className="text-gray-700">Raised: <span className="text-blue-700">{formatCurrency(campaign.currentAmount)}</span></span>
+                                        <span className="text-gray-500">Goal: <span className="text-orange-600">{formatCurrency(campaign.targetAmount)}</span></span>
                                     </div>
-
-                                    {/* Action Buttons */}
-                                    <div className="flex space-x-2">
-                                        <Link
-                                            to={`/campaign/${campaign._id}`}
-                                            className="flex-1 bg-indigo-600 text-white text-center py-2 px-4 rounded-md hover:bg-indigo-700 transition-colors"
-                                        >
-                                            View Details
-                                        </Link>
-                                        <Link
-                                            to={`/donate/${campaign._id}`}
-                                            className="flex-1 bg-green-600 text-white text-center py-2 px-4 rounded-md hover:bg-green-700 transition-colors"
+                                    <div className="flex gap-2 mt-4">
+                                        <button
+                                            onClick={e => { e.stopPropagation(); openDonationModal(campaign); }}
+                                            className="flex-1 bg-orange-500 text-white text-center py-2 rounded-lg font-semibold hover:bg-orange-600 transition"
                                         >
                                             Donate
-                                        </Link>
+                                        </button>
+                                        <button
+                                            onClick={e => {
+                                                e.stopPropagation();
+                                                navigator.clipboard.writeText(`${window.location.origin}/campaign/${campaign._id}`);
+                                                // Optionally, show a temporary confirmation (alert or toast)
+                                                alert('Link copied!');
+                                            }}
+                                            className="flex-1 bg-gray-100 text-gray-700 text-center py-2 rounded-lg font-semibold hover:bg-gray-200 transition border border-gray-300"
+                                        >
+                                            Share
+                                        </button>
                                     </div>
                                 </div>
+                                {campaign.status === 'public_review_pending' && (
+                                    <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-800 p-3 mb-3 rounded flex items-center gap-2">
+                                        <svg className="w-5 h-5 text-yellow-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01" /></svg>
+                                        <div>
+                                            <div className="font-semibold">
+                                                {campaign.isVotingEnabled ? 'Public Review Pending' : 'Proof Documents Pending'}
+                                            </div>
+                                            <div className="text-sm">
+                                                {campaign.isVotingEnabled
+                                                    ? 'The campaigner needs to upload proof documents before public review can begin. You will be notified when the review is ready.'
+                                                    : 'The campaigner needs to upload proof documents for admin verification. This helps ensure transparency and legitimacy of the campaign.'
+                                                }
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>
@@ -469,6 +643,133 @@ const CampaignList = () => {
                     className="fixed inset-0 z-40"
                     onClick={() => setShowProfile(false)}
                 ></div>
+            )}
+
+            {/* Donation Modal */}
+            {showDonationModal && selectedCampaign && (
+                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-bold text-gray-900">Make a Donation</h3>
+                            <button
+                                onClick={closeDonationModal}
+                                className="text-gray-400 hover:text-gray-600"
+                            >
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+                            <h4 className="font-semibold text-gray-900 mb-2">{selectedCampaign.title}</h4>
+                            <p className="text-sm text-gray-600 mb-2">{selectedCampaign.description}</p>
+                            <div className="text-sm text-gray-500">
+                                Goal: {formatCurrency(selectedCampaign.targetAmount)} |
+                                Raised: {formatCurrency(selectedCampaign.currentAmount)}
+                            </div>
+                        </div>
+
+                        {!user ? (
+                            <div className="text-center">
+                                <p className="text-gray-600 mb-4">Please login to make a donation</p>
+                                <Link
+                                    to="/login"
+                                    className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+                                >
+                                    Login
+                                </Link>
+                            </div>
+                        ) : (
+                            <form onSubmit={handleDonate} className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Donation Amount (₹)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        value={donationAmount}
+                                        onChange={(e) => setDonationAmount(e.target.value)}
+                                        placeholder="Enter amount"
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Your Name
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={donorName}
+                                        onChange={(e) => setDonorName(e.target.value)}
+                                        placeholder="Enter your name"
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Message (Optional)
+                                    </label>
+                                    <textarea
+                                        value={donorMessage}
+                                        onChange={(e) => setDonorMessage(e.target.value)}
+                                        placeholder="Leave a message of support..."
+                                        rows={3}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    />
+                                </div>
+                                <div className="flex items-center">
+                                    <input
+                                        type="checkbox"
+                                        id="anonymous"
+                                        checked={isAnonymous}
+                                        onChange={(e) => setIsAnonymous(e.target.checked)}
+                                        className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                                    />
+                                    <label htmlFor="anonymous" className="ml-2 block text-sm text-gray-900">
+                                        Make donation anonymous
+                                    </label>
+                                </div>
+                                <div className="flex gap-3 pt-4">
+                                    <button
+                                        type="button"
+                                        onClick={closeDonationModal}
+                                        className="flex-1 px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isDonating}
+                                        className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 disabled:opacity-50"
+                                    >
+                                        {isDonating ? 'Processing...' : `Donate ${donationAmount ? formatCurrency(parseFloat(donationAmount)) : ''}`}
+                                    </button>
+                                </div>
+                            </form>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {showPublicReviewModal && selectedCampaign && (
+                <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+                    <div className="bg-yellow-50 border-l-4 border-yellow-500 text-yellow-800 p-6 rounded-xl shadow-xl max-w-md w-full mx-4 flex flex-col items-center">
+                        <svg className="w-10 h-10 text-yellow-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01" /></svg>
+                        <div className="font-bold text-lg mb-2">
+                            {selectedCampaign.isVotingEnabled ? 'Public Review Pending' : 'Proof Documents Pending'}
+                        </div>
+                        <div className="text-sm mb-4 text-center">
+                            {selectedCampaign.isVotingEnabled
+                                ? 'The campaigner needs to upload proof documents before public review can begin. You will be notified when the review is ready.'
+                                : 'The campaigner needs to upload proof documents for admin verification. This helps ensure transparency and legitimacy of the campaign.'
+                            }
+                        </div>
+                        <button onClick={() => setShowPublicReviewModal(false)} className="mt-2 px-6 py-2 bg-yellow-500 text-white rounded-lg font-semibold hover:bg-yellow-600 transition">OK</button>
+                    </div>
+                </div>
             )}
         </div>
     );

@@ -22,7 +22,7 @@ const donationSchema = new mongoose.Schema({
     paymentMethod: {
         type: String,
         required: [true, 'Payment method is required'],
-        enum: ['upi', 'card', 'net_banking', 'wallet']
+        enum: ['upi', 'card', 'net_banking', 'wallet', 'razorpay']
     },
     paymentStatus: {
         type: String,
@@ -47,6 +47,10 @@ const donationSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    },
+    paymentId: {
+        type: String,
+        required: false // Should be set for Razorpay payments
     }
 });
 

@@ -24,7 +24,7 @@ def verify_pan_number(user_pan, text):
     pan_regex = extract_pan_numbers(text)
     return "✅ PAN Number Verified" if user_pan.upper() in pan_regex else "❌ PAN Number Not Verified"
 
-def match_faces(id_image_path, face_image_path, threshold=0.70):
+def match_faces(id_image_path, face_image_path, threshold=0.60):
     try:
         id_img = face_recognition.load_image_file(id_image_path)
         face_img = face_recognition.load_image_file(face_image_path)

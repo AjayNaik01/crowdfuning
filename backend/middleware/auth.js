@@ -48,7 +48,7 @@ const authenticateToken = async (req, res, next) => {
 
         // Add user to request object
         req.user = {
-            userId: user._id,
+            userId: user._id.toString(),
             email: user.email,
             name: user.name,
             role: user.role

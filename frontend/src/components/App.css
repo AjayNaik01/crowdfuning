@@ -1,0 +1,36 @@
+@keyframes slide-ltr {
+    0% {
+        opacity: 0;
+        transform: translateX(-40%);
+    }
+
+    10% {
+        opacity: 1;
+        transform: translateX(-10%);
+    }
+
+    80% {
+        opacity: 1;
+        transform: translateX(10%);
+    }
+
+    100% {
+        opacity: 0;
+        transform: translateX(40%);
+    }
+}
+
+.animate-slide-ltr {
+    animation: slide-ltr 2.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fade-in-up-on-view {
+    opacity: 0;
+    transform: translateY(40px);
+    transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1), transform 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fade-in-up-on-view.visible {
+    opacity: 1;
+    transform: translateY(0);
+}

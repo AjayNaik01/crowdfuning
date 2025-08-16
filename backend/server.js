@@ -3,6 +3,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const connectDB = require('./config/database');
 const path = require('path');
+const statisticsRoute = require('./routes/statistics');
 
 // Load environment variables
 dotenv.config({ path: './config.env' });
@@ -51,39 +52,27 @@ app.get('/', (req, res) => {
     res.json({ message: 'Crowdfunding API is running!' });
 });
 
-// Serve static files from uploads directory (MUST be before API routes)
-app.use('/uploads', (req, res, next) => {
-    console.log('=== STATIC FILE REQUEST ===');
-    console.log('Request URL:', req.url);
-    console.log('Request method:', req.method);
-
-    // Remove leading slash from req.url to get the correct path
-    const cleanUrl = req.url.startsWith('/') ? req.url.substring(1) : req.url;
-    const filePath = path.join(__dirname, 'uploads', cleanUrl);
-
-    console.log('Clean URL:', cleanUrl);
-    console.log('Full path:', filePath);
-    console.log('File exists:', require('fs').existsSync(filePath));
-    console.log('========================');
-
-    if (require('fs').existsSync(filePath)) {
-        res.sendFile(filePath);
-    } else {
-        console.log('File not found, passing to next middleware');
-        next();
-    }
-});
+// Serve static files with CORS headers
+app.use('/uploads', cors(), express.static(path.join(__dirname, 'uploads')));
 
 // Routes
-const userRoutes = require('./routes/user');
 app.use('/api/user', require('./routes/user'));
-
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/kyc', require('./routes/kyc'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/donations', require('./routes/donations'));
 app.use('/api/reports', require('./routes/reports'));
+app.use('/api/withdrawals', require('./routes/withdrawals'));
+app.use('/api/platform-settings', require('./routes/platformSettings'));
+app.use('/api/audit-logs', require('./routes/auditLogs'));
+app.use('/api/contact', require('./routes/contact'));
+app.use('/api/statistics', statisticsRoute);
+
+// Admin routes - mount adminAuth first, then admin routes
+console.log('Loading admin routes...');
+app.use('/api/admin', require('./routes/adminAuth'));
 app.use('/api/admin', require('./routes/admin'));
+console.log('Admin routes loaded successfully');
 
 // Error handling middleware
 app.use((err, req, res, next) => {

@@ -12,6 +12,12 @@ const campaignSchema = new mongoose.Schema({
         trim: true,
         maxlength: [100, 'Title cannot exceed 100 characters']
     },
+    location: {
+        type: String,
+        required: [true, 'Location is required'],
+        trim: true,
+        maxlength: [100, 'Location cannot exceed 100 characters']
+    },
     description: {
         type: String,
         required: [true, 'Campaign description is required'],
@@ -54,8 +60,8 @@ const campaignSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['draft', 'pending_review', 'active', 'paused', 'completed', 'rejected', 'deleted', 'awaiting_admin_approval'],
-        default: 'draft'
+        enum: ['pending_review', 'active', 'completed', 'rejected', 'deleted', 'awaiting_admin_approval'],
+        default: 'pending_review'
     },
     fundsReleased: {
         type: Boolean,
@@ -78,6 +84,11 @@ const campaignSchema = new mongoose.Schema({
         title: String,
         description: String,
         fileUrl: String,
+        type: {
+            type: String,
+            enum: ['voting_document', 'other'],
+            default: 'other'
+        },
         uploadedAt: {
             type: Date,
             default: Date.now

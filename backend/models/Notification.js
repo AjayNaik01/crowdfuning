@@ -8,12 +8,22 @@ const notificationSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['campaign', 'donation', 'kyc', 'admin', 'other'],
+        enum: ['campaign', 'donation', 'kyc', 'admin', 'other', 'voting_document', 'target_reached', 'report'],
         required: true
     },
     message: {
         type: String,
         required: true
+    },
+    recipient: { type: String }, // For admin display: user email, 'All', or campaign title
+    campaign: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Campaign',
+        required: false
+    },
+    document: {
+        title: String,
+        fileUrl: String
     },
     read: {
         type: Boolean,

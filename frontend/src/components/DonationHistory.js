@@ -1,43 +1,72 @@
-import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import PlatformHeader from './PlatformHeader';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+import { FaFileDownload } from 'react-icons/fa';
+import html2canvas from 'html2canvas';
+import DonationReceipt from './DonationReceipt';
 
 const DonationHistory = () => {
+    console.log('DonationHistory component rendered');
     const [donations, setDonations] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [currentPage, setCurrentPage] = useState(1);
-    const [totalPages, setTotalPages] = useState(1);
-    const [totalDonations, setTotalDonations] = useState(0);
-    const [user, setUser] = useState(null);
+    const [error, setError] = useState(null);
     const navigate = useNavigate();
+    const [user, setUser] = useState(null);
+    const [showProfile, setShowProfile] = useState(false);
+    const profileRef = useRef(null);
+    const receiptRef = useRef();
+    const [receiptData, setReceiptData] = useState(null);
+    const [downloading, setDownloading] = useState(false);
 
     useEffect(() => {
+        console.log('DonationHistory: useEffect triggered');
+        fetchUserDonations();
+        // Fetch user profile
+        const fetchUser = async () => {
+            try {
+                const token = localStorage.getItem('token');
+                if (!token) return;
+                const response = await fetch('http://localhost:5001/api/user/profile', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    setUser(data.data?.user);
+                    localStorage.setItem('user', JSON.stringify(data.data?.user));
+                } else {
+                    const userData = localStorage.getItem('user');
+                    if (userData) setUser(JSON.parse(userData));
+                }
+            } catch (error) {
+                const userData = localStorage.getItem('user');
+                if (userData) setUser(JSON.parse(userData));
+            }
+        };
         fetchUser();
-        fetchDonations();
-    }, [currentPage]);
+    }, []);
 
-    const fetchUser = async () => {
-        try {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                navigate('/login');
-                return;
+    // Close dropdown when clicking outside
+    useEffect(() => {
+        function handleClickOutside(event) {
+            if (profileRef.current && !profileRef.current.contains(event.target)) {
+                setShowProfile(false);
             }
-            const response = await fetch('http://localhost:5001/api/user/profile', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-            if (response.ok) {
-                const data = await response.json();
-                setUser(data.data?.user);
-            }
-        } catch (error) {
-            console.error('Error fetching user:', error);
         }
-    };
+        if (showProfile) {
+            document.addEventListener('mousedown', handleClickOutside);
+        } else {
+            document.removeEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showProfile]);
 
-    const fetchDonations = async () => {
-        setLoading(true);
+    const fetchUserDonations = async () => {
         try {
             const token = localStorage.getItem('token');
             if (!token) {
@@ -45,38 +74,31 @@ const DonationHistory = () => {
                 return;
             }
 
-            const response = await fetch(`http://localhost:5001/api/donations/user/my-donations?page=${currentPage}&limit=10`, {
+            const response = await fetch('http://localhost:5001/api/donations/user-donations', {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
             });
+
+            if (response.status === 401) {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                navigate('/login');
+                return;
+            }
 
             const data = await response.json();
             if (data.success) {
-                setDonations(data.data.donations);
-                setTotalPages(data.data.totalPages);
-                setTotalDonations(data.data.total);
+                setDonations(data.data.donations || []);
+            } else {
+                setError('Failed to fetch donations');
             }
         } catch (error) {
             console.error('Error fetching donations:', error);
+            setError('Unable to connect to server');
         } finally {
             setLoading(false);
         }
-    };
-
-    const formatCurrency = (amount) => {
-        return new Intl.NumberFormat('en-IN', {
-            style: 'currency',
-            currency: 'INR'
-        }).format(amount);
-    };
-
-    const formatDate = (dateString) => {
-        return new Date(dateString).toLocaleDateString('en-IN', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        });
     };
 
     const handleLogout = () => {
@@ -85,239 +107,122 @@ const DonationHistory = () => {
         navigate('/');
     };
 
+    const formatDate = (dateString) => {
+        const date = new Date(dateString);
+        return date.toLocaleDateString('en-IN', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' });
+    };
+
+    const handleDownloadReceipt = async (donation) => {
+        setReceiptData({ donation, user });
+        setDownloading(true);
+        setTimeout(async () => {
+            const input = receiptRef.current;
+            if (!input) return;
+            const canvas = await html2canvas(input, { scale: 2, useCORS: true });
+            const imgData = canvas.toDataURL('image/png');
+            const pdf = new jsPDF({ unit: 'px', format: 'a4' });
+            const pageWidth = pdf.internal.pageSize.getWidth();
+            const imgWidth = Math.min(canvas.width, pageWidth - 80);
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            pdf.addImage(imgData, 'PNG', 40, 40, imgWidth, imgHeight);
+            pdf.save(`DonationReceipt_${donation._id}.pdf`);
+            setDownloading(false);
+            setReceiptData(null);
+        }, 100);
+    };
+
     if (loading) {
         return (
-            <div className="min-h-screen bg-gray-50">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                    <div className="text-center">
-                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
-                        <p className="mt-4 text-gray-600">Loading your donation history...</p>
-                    </div>
-                </div>
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen bg-gray-50">
-            {/* Header */}
-            <header className="bg-white shadow-sm border-b border-gray-200">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between items-center h-16">
-                        <div className="flex items-center">
-                            <div className="flex-shrink-0">
-                                <div className="h-8 w-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-                                    <svg className="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                                    </svg>
-                                </div>
-                            </div>
-                            <div className="ml-3">
-                                <h1 className="text-xl font-bold text-gray-900">CrowdFund</h1>
-                            </div>
-                        </div>
-
-                        <div className="flex items-center space-x-4">
-                            <Link
-                                to="/campaigns"
-                                className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                            >
-                                Browse Campaigns
-                            </Link>
-                            <Link
-                                to="/dashboard"
-                                className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                            >
-                                Dashboard
-                            </Link>
-                            <button
-                                onClick={handleLogout}
-                                className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                            >
-                                Sign Out
-                            </button>
-                        </div>
-                    </div>
+        <>
+            <PlatformHeader />
+            {/* Hidden receipt for PDF generation */}
+            {downloading && receiptData && (
+                <div style={{ position: 'fixed', left: '-9999px', top: 0 }}>
+                    <DonationReceipt ref={receiptRef} donation={receiptData.donation} user={receiptData.user} />
                 </div>
-            </header>
-
+            )}
             {/* Main Content */}
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                {/* Page Header */}
                 <div className="mb-8">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h1 className="text-3xl font-bold text-gray-900">My Donation History</h1>
-                            <p className="mt-2 text-lg text-gray-600">
-                                Track all your contributions and their impact
-                            </p>
-                        </div>
-                        <div className="text-right">
-                            <p className="text-sm text-gray-500">Total Donations</p>
-                            <p className="text-2xl font-bold text-indigo-600">{totalDonations}</p>
-                        </div>
-                    </div>
+                    <h1 className="text-3xl font-bold text-gray-900">My Donation History</h1>
+                    <p className="mt-2 text-gray-600">Track all your contributions and support for various campaigns</p>
                 </div>
 
-                {/* Donations Table */}
-                <div className="bg-white shadow-sm rounded-lg overflow-hidden">
+                {error && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-6 mb-8">
+                        <span className="text-red-800 font-medium">{error}</span>
+                        <button onClick={fetchUserDonations} className="mt-3 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium ml-3">
+                            Try Again
+                        </button>
+                    </div>
+                )}
+
+                <div className="bg-white rounded-lg shadow-sm">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                        <h2 className="text-lg font-medium text-gray-900">All Donations</h2>
+                    </div>
+
                     {donations.length === 0 ? (
                         <div className="text-center py-12">
-                            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                            </svg>
-                            <h3 className="mt-2 text-sm font-medium text-gray-900">No donations yet</h3>
-                            <p className="mt-1 text-sm text-gray-500">Start supporting campaigns by making your first donation.</p>
-                            <div className="mt-6">
-                                <Link
-                                    to="/campaigns"
-                                    className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
-                                >
-                                    Browse Campaigns
-                                </Link>
-                            </div>
+                            <h3 className="text-lg font-medium text-gray-900">No donations yet</h3>
+                            <p className="mt-2 text-gray-600">Start supporting campaigns by making your first donation.</p>
+                            <Link to="/campaigns" className="mt-6 inline-flex items-center px-6 py-3 border border-transparent shadow-sm text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                                Browse Campaigns
+                            </Link>
                         </div>
                     ) : (
-                        <>
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full divide-y divide-gray-200">
-                                    <thead className="bg-gray-50">
-                                        <tr>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Campaign
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Amount
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Date
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Status
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Actions
-                                            </th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="bg-white divide-y divide-gray-200">
-                                        {donations.map((donation) => (
-                                            <tr key={donation._id} className="hover:bg-gray-50">
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <div className="flex items-center">
-                                                        <div className="flex-shrink-0 h-10 w-10">
-                                                            <div className="h-10 w-10 rounded-lg bg-indigo-100 flex items-center justify-center">
-                                                                <svg className="h-6 w-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                                                                </svg>
-                                                            </div>
-                                                        </div>
-                                                        <div className="ml-4">
-                                                            <div className="text-sm font-medium text-gray-900">
-                                                                {donation.campaign?.title || 'Campaign'}
-                                                            </div>
-                                                            <div className="text-sm text-gray-500">
-                                                                {donation.campaign?.category || 'Category'}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <div className="text-sm font-medium text-green-700">
-                                                        {formatCurrency(donation.amount)}
-                                                    </div>
-                                                    {donation.message && (
-                                                        <div className="text-sm text-gray-500 mt-1">
-                                                            "{donation.message}"
-                                                        </div>
-                                                    )}
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                    {formatDate(donation.createdAt)}
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                                        Completed
-                                                    </span>
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                                    <Link
-                                                        to={`/campaign/${donation.campaign?._id}`}
-                                                        className="text-indigo-600 hover:text-indigo-900"
-                                                    >
-                                                        View Campaign
-                                                    </Link>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-
-                            {/* Pagination */}
-                            {totalPages > 1 && (
-                                <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
-                                    <div className="flex-1 flex justify-between sm:hidden">
-                                        <button
-                                            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                                            disabled={currentPage === 1}
-                                            className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                                        >
-                                            Previous
-                                        </button>
-                                        <button
-                                            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                                            disabled={currentPage === totalPages}
-                                            className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                                        >
-                                            Next
-                                        </button>
-                                    </div>
-                                    <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                                        <div>
-                                            <p className="text-sm text-gray-700">
-                                                Showing page <span className="font-medium">{currentPage}</span> of{' '}
-                                                <span className="font-medium">{totalPages}</span>
-                                            </p>
-                                        </div>
-                                        <div>
-                                            <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                                                <button
-                                                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                                                    disabled={currentPage === 1}
-                                                    className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                >
-                                                    Previous
-                                                </button>
-                                                {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Campaign</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {donations.map((donation) => (
+                                        <tr key={donation._id} className="hover:bg-gray-50">
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <div className="text-sm font-medium text-gray-900">
+                                                    {donation.campaign?.title || 'Campaign'}
                                                     <button
-                                                        key={page}
-                                                        onClick={() => setCurrentPage(page)}
-                                                        className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${currentPage === page
-                                                                ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600'
-                                                                : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
-                                                            }`}
+                                                        className="ml-2 text-indigo-500 hover:text-indigo-700 p-1"
+                                                        title="Download Receipt"
+                                                        onClick={() => handleDownloadReceipt(donation)}
                                                     >
-                                                        {page}
+                                                        <FaFileDownload size={14} />
                                                     </button>
-                                                ))}
-                                                <button
-                                                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                                                    disabled={currentPage === totalPages}
-                                                    className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                >
-                                                    Next
-                                                </button>
-                                            </nav>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                        </>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <div className="text-sm font-medium text-green-700">₹{donation.amount}</div>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                {new Date(donation.createdAt).toLocaleDateString('en-IN')}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                                    Completed
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     )}
                 </div>
             </div>
-        </div>
+        </>
     );
 };
 

@@ -32,7 +32,7 @@ const userSchema = new mongoose.Schema({
     },
     kycStatus: {
         type: String,
-        enum: ['NOT_VERIFIED', 'VERIFIED', 'PENDING', 'FAILED'],
+        enum: ['NOT_VERIFIED', 'PENDING', 'VERIFIED', 'REJECTED'],
         default: 'NOT_VERIFIED'
     },
     kycData: [
@@ -47,6 +47,11 @@ const userSchema = new mongoose.Schema({
             aadhaar_number: String, // Aadhaar only
             father_name: String, // PAN only
             pan_number: String, // PAN only
+            phone: String, // Phone number
+            address: String, // Address
+            accountNumber: String, // Bank account number
+            ifsc: String, // IFSC code
+            bankName: String, // Bank name
             idCardImage: String, // filename or path
             faceImage: String, // filename or path
             verifiedAt: Date,
@@ -61,6 +66,10 @@ const userSchema = new mongoose.Schema({
     resetPasswordToken: String,
     resetPasswordExpires: Date,
     isEmailVerified: {
+        type: Boolean,
+        default: false
+    },
+    isBlocked: {
         type: Boolean,
         default: false
     },

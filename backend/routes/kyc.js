@@ -99,7 +99,7 @@ router.post('/submit', authenticateToken, [
             idNumber,
             idImage
         };
-        user.kycStatus = 'pending';
+        user.kycStatus = 'PENDING';
         // Note: No role change since all users can create campaigns
 
         await user.save();
@@ -157,9 +157,13 @@ router.get('/status', authenticateToken, async (req, res) => {
 router.post('/verify', authenticateToken, upload.fields([
     { name: 'idCard', maxCount: 1 },
     { name: 'faceImage', maxCount: 1 }
-]), async (req, res) => {
+]), (req, res, next) => {
+    console.log('KYC req.body:', req.body);
+    console.log('KYC req.files:', req.files);
+    next();
+}, async (req, res) => {
     try {
-        const { idType = 'AADHAR', name, dob, gender, aadhaar_number, father_name, pan_number } = req.body;
+        const { idType = 'AADHAR', name, dob, gender, aadhaar_number, father_name, pan_number, phone, address, accountNumber, ifsc, bankName } = req.body;
 
         // Check if files were uploaded
         if (!req.files || !req.files.idCard || !req.files.faceImage) {
@@ -202,7 +206,7 @@ router.post('/verify', authenticateToken, upload.fields([
             if (hasUsedAadhaar) {
                 return res.status(400).json({
                     success: false,
-                    message: 'You have already submitted KYC verification with this Aadhaar number. Please use a different ID or contact support if you need to update your KYC.'
+                    message: 'Please try after 24 hours. Its under manual review, check back after some time as admin may verify your KYC manually.'
                 });
             }
         } else if (idType === 'PAN' && pan_number) {
@@ -234,7 +238,7 @@ router.post('/verify', authenticateToken, upload.fields([
             if (hasUsedPAN) {
                 return res.status(400).json({
                     success: false,
-                    message: 'You have already submitted KYC verification with this PAN number. Please use a different ID or contact support if you need to update your KYC.'
+                    message: 'Please try after 24 hours. If urgent, check back after some time as admin may verify your KYC manually.'
                 });
             }
         }
@@ -264,16 +268,6 @@ router.post('/verify', authenticateToken, upload.fields([
             idType,
             fields
         );
-
-        // Clean up uploaded files
-        kycService.cleanupFiles([idCardFile, faceImageFile]);
-
-        if (kycResult.error) {
-            return res.status(400).json({
-                success: false,
-                message: kycResult.error
-            });
-        }
 
         // Parse result string for status
         const resultStr = typeof kycResult === 'string' ? kycResult : (kycResult.result || '');
@@ -313,23 +307,33 @@ router.post('/verify', authenticateToken, upload.fields([
             aadhaar_number: fields.aadhaar_number || '',
             father_name: fields.father_name || '',
             pan_number: fields.pan_number || '',
+            phone: phone || '',
+            address: address || '',
+            accountNumber: accountNumber || '',
+            ifsc: ifsc || '',
+            bankName: bankName || '',
             idCardImage: idCardFile.filename || idCardFile.path,
             faceImage: faceImageFile.filename || faceImageFile.path,
             verifiedAt: new Date(),
             status,
             verificationResult: resultStr
         };
-        // Push the record to kycData array, and update kycStatus if VERIFIED
+        // Push the record to kycData array, and update kycStatus:
+        // - If AI status is VERIFIED, set kycStatus to VERIFIED
+        // - If AI status is FAILED (or anything else), set kycStatus to PENDING for manual review
         const update = status === 'VERIFIED'
             ? { $push: { kycData: kycRecord }, $set: { kycStatus: 'VERIFIED' } }
-            : { $push: { kycData: kycRecord } };
+            : { $push: { kycData: kycRecord }, $set: { kycStatus: 'PENDING' } };
         const updateResult = await User.findByIdAndUpdate(userId, update, { new: true });
         console.log('MongoDB update result:', updateResult, 'Type of _id in DB:', updateResult?._id ? typeof updateResult._id : 'N/A');
 
-        res.json({
-            success: true,
-            data: { status, result: resultStr }
-        });
+        // Simulate AI delay
+        setTimeout(() => {
+            res.json({
+                success: true,
+                data: { status, result: resultStr }
+            });
+        }, 10000);
 
     } catch (error) {
         console.error('KYC verification error:', error);

@@ -6,6 +6,11 @@ const { handleValidationErrors } = require('../middleware/validate');
 const { authenticateToken } = require('../middleware/auth');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
+const Notification = require('../models/Notification');
+const Donation = require('../models/Donation');
+const { sendOTPEmail, sendDonorNotificationEmail } = require('../utils/emailService');
+const Comment = require('../models/Comment');
 
 const router = express.Router();
 
@@ -36,28 +41,67 @@ const videoStorage = multer.diskStorage({
     }
 });
 
-const upload = multer({
-    storage: multer.diskStorage({
-        destination: function (req, file, cb) {
-            if (file.mimetype.startsWith('image/')) {
-                cb(null, path.join(__dirname, '../uploads/campaigns/images'));
-            } else if (file.mimetype.startsWith('video/')) {
-                cb(null, path.join(__dirname, '../uploads/campaigns/videos'));
-            } else {
-                cb(new Error('Invalid file type'), null);
-            }
-        },
-        filename: function (req, file, cb) {
-            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-            if (file.mimetype.startsWith('image/')) {
-                cb(null, 'img-' + uniqueSuffix + path.extname(file.originalname));
-            } else if (file.mimetype.startsWith('video/')) {
-                cb(null, 'vid-' + uniqueSuffix + path.extname(file.originalname));
-            } else {
-                cb(new Error('Invalid file type'), null);
-            }
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, path.join(__dirname, '../uploads/campaigns/images'));
+        } else if (file.mimetype.startsWith('video/')) {
+            cb(null, path.join(__dirname, '../uploads/campaigns/videos'));
+        } else {
+            cb(new Error('Invalid file type'), null);
         }
-    })
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, 'img-' + uniqueSuffix + path.extname(file.originalname));
+        } else if (file.mimetype.startsWith('video/')) {
+            cb(null, 'vid-' + uniqueSuffix + path.extname(file.originalname));
+        } else {
+            cb(new Error('Invalid file type'), null);
+        }
+    }
+});
+
+// Multer configuration for proof documents
+const proofStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const uploadPath = path.join(__dirname, '../uploads/proofs');
+        fs.mkdirSync(uploadPath, { recursive: true });
+        cb(null, uploadPath);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, `${req.params.campaignId}-${uniqueSuffix}${path.extname(file.originalname)}`);
+    }
+});
+
+const fileFilter = (req, file, cb) => {
+    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
+        cb(null, true);
+    } else {
+        cb(new Error('File type not supported'), false);
+    }
+};
+
+const proofFileFilter = (req, file, cb) => {
+    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/') || file.mimetype === 'application/pdf') {
+        cb(null, true);
+    } else {
+        cb(new Error('File type not supported. Please upload an image, video, or PDF.'), false);
+    }
+};
+
+const upload = multer({
+    storage: storage,
+    fileFilter: fileFilter,
+    limits: { fileSize: 1024 * 1024 * 50 } // 50 MB limit
+});
+
+const uploadProof = multer({
+    storage: proofStorage,
+    fileFilter: proofFileFilter,
+    limits: { fileSize: 1024 * 1024 * 100 } // 100 MB limit for proofs
 });
 
 // Create a new campaign
@@ -69,6 +113,10 @@ router.post('/create', authenticateToken, upload.fields([
         .trim()
         .isLength({ min: 5, max: 100 })
         .withMessage('Title must be between 5 and 100 characters'),
+    body('location')
+        .trim()
+        .isLength({ min: 2, max: 100 })
+        .withMessage('Location is required and must be less than 100 characters'),
     body('description')
         .trim()
         .isLength({ min: 50, max: 2000 })
@@ -89,10 +137,6 @@ router.post('/create', authenticateToken, upload.fields([
         .optional()
         .isBoolean()
         .withMessage('Voting enabled must be a boolean'),
-    body('votingEndDate')
-        .optional()
-        .isISO8601()
-        .withMessage('Please provide a valid voting end date'),
     body('isOrganization')
         .optional()
         .isBoolean()
@@ -127,13 +171,13 @@ router.post('/create', authenticateToken, upload.fields([
 
         const {
             title,
+            location,
             description,
             category,
             targetAmount,
             startDate,
             endDate,
             isVotingEnabled,
-            votingEndDate,
             isOrganization,
             organizationName,
             organizationDetails
@@ -162,20 +206,13 @@ router.post('/create', authenticateToken, upload.fields([
             });
         }
 
-        // Validate voting dates if voting is enabled
-        if (isVotingEnabled && votingEndDate) {
-            const votingEnd = new Date(votingEndDate);
-            if (votingEnd <= end) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Voting end date must be after campaign end date'
-                });
-            }
-        }
+        // Auto-enable voting for campaigns >= 50,000
+        const autoVotingEnabled = parseFloat(targetAmount) >= 50000;
 
         const campaign = new Campaign({
             creator: user._id,
             title,
+            location,
             description,
             category,
             targetAmount,
@@ -183,8 +220,8 @@ router.post('/create', authenticateToken, upload.fields([
             endDate: end,
             images: imagePaths,
             videos: videoPaths,
-            isVotingEnabled: isVotingEnabled || false,
-            votingEndDate: isVotingEnabled && votingEndDate ? new Date(votingEndDate) : null,
+            isVotingEnabled: autoVotingEnabled || isVotingEnabled || false,
+            votingEndDate: (autoVotingEnabled || isVotingEnabled) ? new Date(endDate) : null,
             isOrganization: isOrganization || false,
             organizationName: isOrganization ? organizationName : null,
             organizationDetails: isOrganization ? organizationDetails : null,
@@ -464,6 +501,42 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     }
 });
 
+// Get vote status for a user on a campaign
+router.get('/:id/vote-status', authenticateToken, async (req, res) => {
+    try {
+        const campaignId = req.params.id;
+        const userId = req.user.userId;
+
+        const campaign = await Campaign.findById(campaignId);
+        if (!campaign) {
+            return res.status(404).json({
+                success: false,
+                message: 'Campaign not found'
+            });
+        }
+
+        // Check if user has voted
+        const userVote = campaign.votes.find(vote => vote.voter.toString() === userId);
+
+        res.json({
+            success: true,
+            data: {
+                hasVoted: !!userVote,
+                userVote: userVote ? userVote.vote : null,
+                voteComment: userVote ? userVote.comment : null,
+                votedAt: userVote ? userVote.votedAt : null
+            }
+        });
+
+    } catch (error) {
+        console.error('Vote status error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to get vote status'
+        });
+    }
+});
+
 // Get single campaign by ID
 router.get('/:id', async (req, res) => {
     try {
@@ -520,13 +593,6 @@ router.post('/:id/vote', authenticateToken, [
             return res.status(400).json({
                 success: false,
                 message: 'Voting is not enabled for this campaign'
-            });
-        }
-
-        if (campaign.status !== 'active') {
-            return res.status(400).json({
-                success: false,
-                message: 'Voting is only allowed for active campaigns'
             });
         }
 
@@ -699,10 +765,6 @@ router.put('/:id', authenticateToken, upload.fields([
         .optional()
         .isBoolean()
         .withMessage('Voting enabled must be a boolean'),
-    body('votingEndDate')
-        .optional()
-        .isISO8601()
-        .withMessage('Please provide a valid voting end date'),
     body('isOrganization')
         .optional()
         .isBoolean()
@@ -764,92 +826,32 @@ router.put('/:id', authenticateToken, upload.fields([
         const newImagePaths = (req.files['images'] || []).map(f => '/uploads/campaigns/images/' + f.filename);
         const newVideoPaths = (req.files['videos'] || []).map(f => '/uploads/campaigns/videos/' + f.filename);
 
+        // Auto-enable voting for campaigns >= 50,000
+        const autoVotingEnabledUpdate = parseFloat(req.body.targetAmount || campaign.targetAmount) >= 50000;
+        campaign.isVotingEnabled = autoVotingEnabledUpdate || req.body.isVotingEnabled || false;
+        campaign.votingEndDate = (autoVotingEnabledUpdate || req.body.isVotingEnabled) ? new Date(req.body.endDate || campaign.endDate) : null;
+
         // Update campaign fields
-        const updateFields = {};
+        campaign.title = req.body.title || campaign.title;
+        campaign.description = req.body.description || campaign.description;
+        campaign.category = req.body.category || campaign.category;
+        campaign.targetAmount = req.body.targetAmount || campaign.targetAmount;
+        campaign.startDate = req.body.startDate ? new Date(req.body.startDate) : campaign.startDate;
+        campaign.endDate = req.body.endDate ? new Date(req.body.endDate) : campaign.endDate;
+        campaign.isOrganization = req.body.isOrganization || false;
+        campaign.organizationName = req.body.isOrganization ? req.body.organizationName : null;
+        campaign.organizationDetails = req.body.isOrganization ? req.body.organizationDetails : null;
+        campaign.images = newImagePaths || campaign.images;
+        campaign.videos = newVideoPaths || campaign.videos;
 
-        if (req.body.title) updateFields.title = req.body.title;
-        if (req.body.description) updateFields.description = req.body.description;
-        if (req.body.category) updateFields.category = req.body.category;
-        if (req.body.targetAmount) updateFields.targetAmount = req.body.targetAmount;
-        if (req.body.isVotingEnabled !== undefined) updateFields.isVotingEnabled = req.body.isVotingEnabled;
-        if (req.body.isOrganization !== undefined) updateFields.isOrganization = req.body.isOrganization;
-        if (req.body.organizationName) updateFields.organizationName = req.body.organizationName;
-        if (req.body.organizationDetails) updateFields.organizationDetails = req.body.organizationDetails;
-
-        // Handle dates
-        if (req.body.startDate) {
-            const startDate = new Date(req.body.startDate);
-            const now = new Date();
-
-            if (startDate < now) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Start date cannot be in the past'
-                });
-            }
-            updateFields.startDate = startDate;
-        }
-
-        if (req.body.endDate) {
-            const endDate = new Date(req.body.endDate);
-            const startDate = updateFields.startDate || campaign.startDate;
-
-            if (endDate <= startDate) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'End date must be after start date'
-                });
-            }
-            updateFields.endDate = endDate;
-        }
-
-        // Handle voting end date
-        if (req.body.votingEndDate) {
-            const votingEndDate = new Date(req.body.votingEndDate);
-            const endDate = updateFields.endDate || campaign.endDate;
-
-            if (votingEndDate <= endDate) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Voting end date must be after campaign end date'
-                });
-            }
-            updateFields.votingEndDate = votingEndDate;
-        }
-
-        // Handle images and videos
-        if (newImagePaths.length > 0) {
-            updateFields.images = [...(campaign.images || []), ...newImagePaths];
-        }
-        if (newVideoPaths.length > 0) {
-            updateFields.videos = [...(campaign.videos || []), ...newVideoPaths];
-        }
-
-        // Update status based on current status
-        if (campaign.status === 'active' || campaign.status === 'completed') {
-            // If campaign is active or completed, keep it active
-            updateFields.status = 'active';
-        } else if (campaign.status === 'draft') {
-            // If it's a draft, keep it as draft
-            updateFields.status = 'draft';
-        } else {
-            // For pending_review or rejected, set back to pending_review
-            updateFields.status = 'pending_review';
-            updateFields.rejectionReason = null; // Clear rejection reason
-        }
-
-        // Update the campaign
-        const updatedCampaign = await Campaign.findByIdAndUpdate(
-            campaignId,
-            updateFields,
-            { new: true, runValidators: true }
-        );
+        await campaign.save();
 
         res.json({
             success: true,
-            message: 'Campaign updated successfully!',
+            message: 'Campaign updated successfully',
             data: {
-                campaign: updatedCampaign
+                campaignId: campaign._id,
+                status: campaign.status
             }
         });
 
@@ -857,9 +859,154 @@ router.put('/:id', authenticateToken, upload.fields([
         console.error('Campaign update error:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to update campaign. Please try again.'
+            message: 'Failed to update campaign'
         });
     }
 });
 
-module.exports = router; 
+// Upload verification document for a campaign and notify donors if voting is enabled
+router.post(
+    '/:campaignId/upload-document',
+    authenticateToken,
+    uploadProof.single('document'),
+    async (req, res) => {
+        try {
+            const { campaignId } = req.params;
+            const { description } = req.body;
+            const file = req.file;
+
+            if (!file || !description) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'File and description are required',
+                });
+            }
+
+            // Find the campaign
+            const campaign = await Campaign.findById(campaignId);
+            if (!campaign) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Campaign not found',
+                });
+            }
+
+            // Only the campaign creator can upload documents
+            if (campaign.creator.toString() !== req.user.userId) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'You are not authorized to upload documents for this campaign',
+                });
+            }
+
+            // Add the proof document
+            campaign.proofDocuments.push({
+                title: file.originalname,
+                description,
+                fileUrl: `/uploads/proofs/${file.filename}`,
+                type: 'voting_document',
+                uploadedAt: new Date(),
+            });
+            await campaign.save();
+
+            // If voting is enabled and there is at least one proof document, notify all donors
+            if (campaign.isVotingEnabled && campaign.proofDocuments.length > 0) {
+                // Find all unique donors for this campaign
+                const donations = await Donation.find({ campaign: campaignId }).populate('donor', 'email name');
+                const donorIds = [...new Set(donations.map((d) => d.donor && d.donor._id && d.donor._id.toString()).filter(Boolean))];
+                const donorInfos = donations
+                    .map((d) => d.donor && d.donor.email ? { email: d.donor.email, name: d.donor.name } : null)
+                    .filter(Boolean);
+
+                const notificationText = `A new document has been uploaded for the campaign "${campaign.title}". Please review the document and cast your vote.`;
+
+                // Create a notification and send email for each donor
+                for (const donorInfo of donorInfos) {
+                    // Find the userId for notification
+                    const user = await User.findOne({ email: donorInfo.email });
+                    if (user) {
+                        await Notification.create({
+                            user: user._id,
+                            type: 'voting_document',
+                            message: notificationText,
+                            campaign: campaignId,
+                            document: {
+                                title: file.originalname,
+                                fileUrl: `/uploads/proofs/${file.filename}`
+                            },
+                            createdAt: new Date(),
+                            read: false,
+                        });
+                        // Send custom donor notification email with exact content
+                        try {
+                            await sendDonorNotificationEmail(
+                                donorInfo.email,
+                                donorInfo.name || 'Donor',
+                                {
+                                    type: 'Voting Document',
+                                    campaignTitle: campaign.title,
+                                    documentTitle: file.originalname,
+                                    documentUrl: `${req.protocol}://${req.get('host')}/uploads/proofs/${file.filename}`,
+                                    message: notificationText,
+                                    date: new Date().toLocaleDateString(),
+                                    voteUrl: `${req.protocol}://${req.get('host')}/campaigns/${campaignId}`
+                                }
+                            );
+                        } catch (e) {
+                            console.error('Failed to send donor notification email:', e.message);
+                        }
+                    }
+                }
+            }
+
+            res.json({
+                success: true,
+                message: 'Document uploaded and notifications sent to donors (if applicable)',
+                data: campaign.proofDocuments[campaign.proofDocuments.length - 1],
+            });
+        } catch (error) {
+            console.error('Upload document error:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to upload document',
+            });
+        }
+    }
+);
+
+// Get comments for a campaign (move above dynamic :campaignId route)
+router.get('/:campaignId/comments', async (req, res) => {
+    try {
+        const { campaignId } = req.params;
+        const comments = await Comment.find({ campaignId })
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .exec();
+        res.json({ success: true, data: comments });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to fetch comments' });
+    }
+});
+
+// Add a comment to a campaign (authenticated users only)
+router.post('/:campaignId/comments', authenticateToken, async (req, res) => {
+    try {
+        const { campaignId } = req.params;
+        const { text } = req.body;
+        if (!text || !text.trim()) {
+            return res.status(400).json({ success: false, message: 'Comment text is required' });
+        }
+        const comment = new Comment({
+            campaignId,
+            userId: req.user.userId,
+            userName: req.user.name,
+            text: text.trim()
+        });
+        await comment.save();
+        res.status(201).json({ success: true, data: comment });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to add comment' });
+    }
+});
+
+module.exports = router;
